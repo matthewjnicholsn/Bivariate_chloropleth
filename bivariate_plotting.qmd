@@ -24,13 +24,13 @@ lapply(c("dplyr","sf","cowplot","biscale","survey","srvyr","ggplot2","ggrepel"),
 In the chunk below we read in the data (replace with paths to your local files). We also set a design object, so that we can get accurate proportions and variance estimation (though we don't end up using variances, it is still best practice to use weights for point estimates, totals, and models).
 
 ```{r loading data}
-dat <- read.csv("/Users/matthewnicholson/Downloads/CSV/Data_Données/pumf_cchs.csv")
+dat <- read.csv("/Users/matthewnicholson/CSV/Data_Données/pumf_cchs.csv")
 
 weights <- dat$WTS_M
 
-bsw <- read.csv("/Users/matthewnicholson/Downloads/CSV/Data_Données/cchs_escc_bsw.csv") |> select(-c(1,2,3)) |> as.matrix()
+bsw <- read.csv("/Users/matthewnicholson/CSV/Data_Données/cchs_escc_bsw.csv") |> select(-c(1,2,3)) |> as.matrix()
 
-shp <- st_read("/Users/matthewnicholson/Downloads/HR_035b22a_e/HR_035b22a_e.shp")
+shp <- st_read("/Users/matthewnicholson/HR_035b22a_e/HR_035b22a_e.shp")
 
 
 drep <- svrepdesign(
@@ -219,5 +219,30 @@ map_with_cities <- map +
 ggdraw() +
   draw_plot(map_with_cities, 0, 0, 1, 1) +
   draw_plot(legend, 0.6, 0.65, 0.2, 0.2)
+```
+
+# Looking at Southwestern Ontario
+```{r zooming to SWO}
+sw_ontario <- coord_sf(
+    xlim = c(-83.5, -78.5), 
+    ylim = c(42.0, 44.5),
+    crs = 4326,      
+    expand = FALSE,  
+    datum = NA    
+)
+
+map_zoomed <- map_with_cities + 
+    sw_ontario +
+    theme(
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank()
+    )
+
+ggdraw() +
+  draw_plot(map_zoomed, 0, 0, 1, 1) +
+  draw_plot(legend, 0.15, 0.15, 0.2, 0.2) 
+
 ```
 
