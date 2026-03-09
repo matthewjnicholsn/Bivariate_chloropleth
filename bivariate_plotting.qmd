@@ -1,0 +1,223 @@
+---
+title: "Bivariate mapping with the CCHS"
+subtitle: "Spatial Density of Immigrants and Ratings of Belonging-ness in Ontario"
+author: "Matthew Nicholson"
+institute: "McMaster University"
+date: ""
+format: html
+code-overflow: wrap
+knitr: true
+---
+
+# Background
+This is an experiment using Statistics Canada's Canadian Community Health Survey to map density of immigrants with ratings of belongingness by health region in Ontario. Northern health regions are aggregated in public use data. This map is meant to explore the 
+different geographies of Ontario with regards to immigration, emplacement, and cohesion.
+
+# Data Preparation
+
+First, we load the packages needed:
+```{r setup}
+lapply(c("dplyr","sf","cowplot","biscale","survey","srvyr","ggplot2","ggrepel"),require,character.only = T)
+
+```
+
+In the chunk below we read in the data (replace with paths to your local files). We also set a design object, so that we can get accurate proportions and variance estimation (though we don't end up using variances, it is still best practice to use weights for point estimates, totals, and models).
+
+```{r loading data}
+dat <- read.csv("/Users/matthewnicholson/Downloads/CSV/Data_Données/pumf_cchs.csv")
+
+weights <- dat$WTS_M
+
+bsw <- read.csv("/Users/matthewnicholson/Downloads/CSV/Data_Données/cchs_escc_bsw.csv") |> select(-c(1,2,3)) |> as.matrix()
+
+shp <- st_read("/Users/matthewnicholson/Downloads/HR_035b22a_e/HR_035b22a_e.shp")
+
+
+drep <- svrepdesign(
+    repweights = bsw,
+    weights = weights,
+    data = dat,
+    type = "bootstrap",
+    combined.weights = T
+    )
+```
+
+Some basic cleaning with dplyr and the tidy survey wrapper package srvyr:
+
+```{r data prep}
+#| eval: false
+
+drep_cleaned <- drep |> 
+    as_survey_rep() |> 
+    select(belonging = GEN_20, 
+           immigrant = SDCDGIMM, 
+           province = GEOGPRV, 
+           health_region = GEODGHR4) |> 
+    filter(province == 35) |> 
+    mutate(
+        belonging = na_if(belonging, 9),
+        immigrant = na_if(immigrant, 9),
+        is_immigrant = ifelse(immigrant == 2, 1, 0),
+        high_belonging = ifelse(belonging < 3, 1, 0)
+    )
+
+```
+
+The code below does the aggregation, as the shapefile contains all health regions, but the microdata is aggregated in the North because of low population density and higher non-response.
+
+```{r estimates for plot}
+
+hr_estimates <- drep_cleaned |>
+    group_by(health_region) |> 
+    summarize(
+        prop_imm = survey_mean(is_immigrant, na.rm = TRUE),
+        prop_belongs = survey_mean(high_belonging, na.rm = TRUE)
+    ) |> 
+    select(health_region, prop_imm, prop_belongs) |> 
+    mutate(health_region = paste0(substr(health_region,1,2),substr(health_region,4,5))) |> 
+    mutate(health_region = case_when(
+        health_region %in% c("3539", "3554") ~ "3550",
+        TRUE ~ as.character(health_region)
+    ))
+
+hr_estimates <- hr_estimates |> 
+    bind_rows(
+        hr_estimates |> 
+            filter(health_region == "3562") |> 
+            reframe(health_region = c("3556", "3563"), 
+                    prop_imm = prop_imm, 
+                    prop_belongs = prop_belongs)
+    )
+
+# saveRDS(hr_estimates,"hr_estimates_prop.rds")
+
+```
+
+```{r join with spatial data}
+
+shp <- shp |> select(health_region = HR_UID, hr_labels = ENGNAME, geometry)
+
+hr_shp <- hr_estimates |> 
+    left_join(shp, by = "health_region") |> 
+    st_as_sf()
+
+```
+
+```{r biscale class obj}
+
+plot_data <- bi_class(hr_shp, 
+                     x = prop_imm, 
+                     y = prop_belongs, 
+                     style = "quantile", 
+                     dim = 3)
+
+```
+
+```{r map}
+
+map <- ggplot() +
+    geom_sf(data = plot_data, mapping = aes(fill = bi_class), color = "white", size = 0.1, show.legend = F) +
+    bi_scale_fill(pal = "GrPink", dim = 3) +
+  labs(
+    title = "Immigrant density and Belonging in Ontario"
+  ) +
+  bi_theme()
+
+
+```
+
+# Mapping
+
+```{r loading and mapping}
+
+legend <- bi_legend(pal = "GrPink",
+                    dim = 3,
+                    xlab = "% Immigrants ",
+                    ylab = "% Belonging ",
+                    size = 8)
+
+ggdraw() +
+  draw_plot(map, 0, 0, 1, 1) +
+  draw_plot(legend, 0.6, .65, 0.2, 0.2)
+```
+
+```{r map with health region labels}
+
+key_regions <- c("3595", "3551", "3537", "3544", "3568", "3565", "3550", "3562")
+
+
+label_data <- plot_data |> 
+    filter(health_region %in% key_regions)
+
+map_with_labels <- map +
+    geom_text_repel(
+        data = label_data,
+        aes(label = hr_labels, geometry = geometry),
+        stat = "sf_coordinates",
+        size = 3,
+        fontface = "bold",
+        bg.color = "white", 
+        bg.r = 0.1,
+        force = 5,
+        inherit.aes = F
+    ) +
+       theme(axis.title = element_blank(), axis.text = element_blank(), axis.ticks = element_blank())
+
+ggdraw() +
+  draw_plot(map_with_labels, 0, 0, 1, 1) +
+  draw_plot(legend, 0.6, 0.65, 0.2, 0.2)
+
+```
+
+Now, instea of labelling health regions, lets label the cities themselves by adding some point geometry.
+
+```{r adding point geometry}
+
+cities <- data.frame(
+  city = c("Toronto", "Ottawa", "Hamilton", "London", "Windsor", 
+           "Kingston", "Sudbury", "Thunder Bay", "Guelph", "Kitchener"),
+  lat = c(43.65, 45.42, 43.25, 42.98, 42.31, 44.23, 46.49, 48.38, 43.54, 43.45),
+  lon = c(-79.38, -75.70, -79.87, -81.24, -83.03, -76.48, -81.01, -89.24, -80.25, -80.49)
+)
+
+cities_sf <- cities |> 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) |> 
+  st_transform(st_crs(plot_data))
+
+```
+
+```{r draw the new plot}
+
+map_with_cities <- map +
+    geom_sf(
+        data = cities_sf, 
+        size = 1.5, 
+        color = "black",
+        inherit.aes = FALSE
+    ) +
+    geom_text_repel(
+        data = cities_sf,
+        aes(label = city, geometry = geometry),
+        stat = "sf_coordinates",
+        size = 4,
+        fontface = "bold",
+        bg.color = "white",
+        bg.r = 0.1,
+        min.segment.length = 0, 
+        segment.color = "grey30",
+        segment.size = 0.5,
+        force = 3,    
+        inherit.aes = FALSE
+    ) +
+    theme(
+        axis.title = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank()
+    )
+
+ggdraw() +
+  draw_plot(map_with_cities, 0, 0, 1, 1) +
+  draw_plot(legend, 0.6, 0.65, 0.2, 0.2)
+```
+
